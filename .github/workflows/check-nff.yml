@@ -56,8 +56,6 @@ jobs:
 
           PREVIOUS_STATE=$(cat state.txt 2>/dev/null || echo "unknown")
 
-          CURRENT_STATE="available"
-
           echo "Forrige status: $PREVIOUS_STATE"
           echo "Ny status: $CURRENT_STATE"
 
