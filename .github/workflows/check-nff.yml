@@ -1,0 +1,90 @@
+name: NFF Resale Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-tickets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Hent repository
+        uses: actions/checkout@v4
+
+      - name: Sjekk NFF resale
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          URL="https://resale.fotball.no/list/resaleProducts/?lang=no"
+          EMPTY_TEXT="There are currently no tickets being resold"
+
+          echo "Henter NFF resale-side..."
+
+          HTTP_CODE=$(curl \
+            --location \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-delay 5 \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --user-agent "Mozilla/5.0" \
+            --output page.html \
+            --write-out "%{http_code}" \
+            "$URL")
+
+          echo "HTTP-status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "NFF returnerte HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          if grep -Fqi "$EMPTY_TEXT" page.html; then
+            CURRENT_STATE="empty"
+            echo "Ingen resale-billetter funnet."
+          else
+            CURRENT_STATE="available"
+            echo "Tom-meldingen er borte - mulige billetter!"
+          fi
+
+          PREVIOUS_STATE=$(cat state.txt 2>/dev/null || echo "unknown")
+
+          echo "Forrige status: $PREVIOUS_STATE"
+          echo "Ny status: $CURRENT_STATE"
+
+          if [ "$CURRENT_STATE" = "available" ] && [ "$PREVIOUS_STATE" != "available" ]; then
+
+            MESSAGE="NFF sin resale-side viser ikke lenger meldingen om at det er tomt. Det kan ha blitt lagt ut billetter. Sjekk siden med en gang."
+
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              -H "Title: NFF resale - billetter kan være tilgjengelige!" \
+              -H "Priority: urgent" \
+              -H "Click: $URL" \
+              -d "$MESSAGE" \
+              "https://ntfy.sh/$NTFY_TOPIC"
+
+            echo "Varsel sendt."
+          fi
+
+          if [ "$CURRENT_STATE" != "$PREVIOUS_STATE" ]; then
+            echo "$CURRENT_STATE" > state.txt
+
+            git config user.name "NFF Ticket Monitor"
+            git config user.email "actions@github.com"
+
+            git add state.txt
+            git commit -m "Update ticket state: $CURRENT_STATE"
+            git push
+          else
+            echo "Status uendret."
+          fi
