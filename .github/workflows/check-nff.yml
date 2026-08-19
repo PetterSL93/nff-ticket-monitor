@@ -42,6 +42,9 @@ jobs:
 
           echo "HTTP-status: $HTTP_CODE"
 
+          echo "DEBUG: søker etter kjennetegn på kø/venterom..."
+          grep -Eio ".{0,100}(queue|waiting room|venterom|venterommet|captcha|characters|submit).{0,100}" /tmp/nff-page.html | head -20 || true
+
           if [ "$HTTP_CODE" != "200" ]; then
             echo "NFF returnerte HTTP $HTTP_CODE."
             exit 1
