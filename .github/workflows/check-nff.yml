@@ -6,7 +6,7 @@ on:
 concurrency:
   group: nff-ticket-monitor
   cancel-in-progress: false
-  
+
 permissions:
   contents: write
 
@@ -18,128 +18,240 @@ jobs:
       - name: Hent repository
         uses: actions/checkout@v5
 
+      - name: Sett opp Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Installer Playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+
       - name: Sjekk NFF resale
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          URL="https://resale.fotball.no/list/resale/resaleProductCatalog.json?lang=no"
+          node <<'NODE'
+          const { chromium } = require('playwright');
+          const fs = require('fs');
 
-          echo "Henter NFF resale-API..."
+          const NFF_PAGE = 'https://resale.fotball.no/list/resaleProducts/?lang=no';
+          const NFF_API = 'https://resale.fotball.no/list/resale/resaleProductCatalog.json?lang=no';
+          const NTFY_TOPIC = process.env.NTFY_TOPIC;
 
-          HTTP_CODE=$(curl \
-            --location \
-            --silent \
-            --show-error \
-            --retry 3 \
-            --retry-delay 5 \
-            --connect-timeout 20 \
-            --max-time 60 \
-            --user-agent "Mozilla/5.0" \
-            --header "Accept: application/json" \
-            --output /tmp/nff-resale.json \
-            --write-out "%{http_code}" \
-            "$URL")
+          async function sendNtfy(title, message, priority) {
+            const response = await fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+              method: 'POST',
+              headers: {
+                'Title': title,
+                'Priority': priority,
+                'Click': NFF_PAGE
+              },
+              body: message
+            });
 
-          echo "HTTP-status: $HTTP_CODE"
+            if (!response.ok) {
+              throw new Error(`ntfy returnerte HTTP ${response.status}`);
+            }
 
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "NFF API returnerte HTTP $HTTP_CODE."
-            exit 1
-          fi
+            console.log('ntfy-varsel sendt.');
+          }
 
-          if ! jq empty /tmp/nff-resale.json 2>/dev/null; then
-            echo "Responsen er ikke gyldig JSON."
-            echo "DEBUG: content-type:"
-            file /tmp/nff-resale.json
+          async function main() {
+            const browser = await chromium.launch({
+              headless: true
+            });
 
-            echo "DEBUG: første 1000 tegn av API-responsen:"
-            head -c 1000 /tmp/nff-resale.json || true
+            const context = await browser.newContext({
+              locale: 'nb-NO',
+              userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+                'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+                'Chrome/131.0.0.0 Safari/537.36'
+            });
 
-            echo
-            echo "DEBUG: størrelse:"
-            wc -c /tmp/nff-resale.json
+            const page = await context.newPage();
 
-            exit 1
-          fi
+            try {
+              console.log('Åpner NFF resale-side i Chromium...');
 
+              const pageResponse = await page.goto(NFF_PAGE, {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+              });
 
+              console.log(`NFF-side HTTP-status: ${pageResponse?.status() ?? 'ukjent'}`);
+              console.log(`NFF-side title: ${await page.title()}`);
 
-          AVAILABLE_QUANTITY=$(jq '
-            [
-              .topicWithProductsList[]?.products[]?.availableQuantity
-              | select(type == "number")
-            ]
-            | add // 0
-          ' /tmp/nff-resale.json)
+              console.log('Henter resale-API fra samme nettleserkontekst...');
 
-          RESALE_ITEMS=$(jq '
-            (.resaleItems // [])
-            | length
-          ' /tmp/nff-resale.json)
+              const apiResult = await page.evaluate(async (url) => {
+                const response = await fetch(url, {
+                  method: 'GET',
+                  credentials: 'include',
+                  headers: {
+                    'Accept': 'application/json'
+                  }
+                });
 
-          echo "Tilgjengelig antall: $AVAILABLE_QUANTITY"
-          echo "Antall resale-items: $RESALE_ITEMS"
+                return {
+                  status: response.status,
+                  contentType: response.headers.get('content-type'),
+                  text: await response.text()
+                };
+              }, NFF_API);
 
-          if [ "$AVAILABLE_QUANTITY" -gt 0 ] || [ "$RESALE_ITEMS" -gt 0 ]; then
-            CURRENT_STATE="available"
-            echo "MULIG RESALE-BILLETT FUNNET!"
+              console.log(`API HTTP-status: ${apiResult.status}`);
+              console.log(`API Content-Type: ${apiResult.contentType}`);
 
-          else
-            CURRENT_STATE="empty"
-            echo "Ingen resale-billetter tilgjengelig."
-          fi
+              if (apiResult.status !== 200) {
+                throw new Error(`NFF API returnerte HTTP ${apiResult.status}`);
+              }
 
-          PREVIOUS_STATE=$(cat state.txt 2>/dev/null || echo "unknown")
+              let data;
 
-          echo "Forrige status: $PREVIOUS_STATE"
-          echo "Ny status: $CURRENT_STATE"
+              try {
+                data = JSON.parse(apiResult.text);
+              } catch {
+                console.log('API-responsen er ikke JSON.');
+                console.log(apiResult.text.slice(0, 1000));
 
-          if [ "$CURRENT_STATE" = "available" ] && [ "$PREVIOUS_STATE" != "available" ]; then
+                const previousState =
+                  fs.existsSync('state.txt')
+                    ? fs.readFileSync('state.txt', 'utf8').trim()
+                    : 'unknown';
 
-            MESSAGE="NFF sin resale-side viser tegn til tilgjengelige billetter. Sjekk siden med en gang."
+                const currentState = 'unknown';
 
-            curl \
-              --fail \
-              --silent \
-              --show-error \
-              -H "Title: NFF resale - billetter kan være tilgjengelige!" \
-              -H "Priority: urgent" \
-              -H "Click: $URL" \
-              -d "$MESSAGE" \
-              "https://ntfy.sh/$NTFY_TOPIC"
+                console.log(`Forrige status: ${previousState}`);
+                console.log(`Ny status: ${currentState}`);
 
-            echo "Varsel sendt."
+                if (previousState !== currentState) {
+                  await sendNtfy(
+                    'NFF resale - ukjent endring',
+                    'NFF API svarte med noe annet enn forventet. Sjekk siden manuelt.',
+                    'high'
+                  );
 
-          elif [ "$CURRENT_STATE" = "unknown" ] && [ "$PREVIOUS_STATE" != "unknown" ]; then
+                  fs.writeFileSync('state.txt', currentState);
 
-            MESSAGE="NFF resale-siden ser annerledes ut enn forventet. Dette kan være billetter, en sideendring eller noe annet. Sjekk siden manuelt."
+                  await commitState(currentState);
+                }
 
-            curl \
-              --fail \
-              --silent \
-              --show-error \
-              -H "Title: NFF resale - ukjent endring" \
-              -H "Priority: high" \
-              -H "Click: $URL" \
-              -d "$MESSAGE" \
-              "https://ntfy.sh/$NTFY_TOPIC"
+                return;
+              }
 
-            echo "Unknown-varsel sendt."
+              const products = [];
 
-          fi
+              for (const topic of (data.topicWithProductsList || [])) {
+                for (const product of (topic.products || [])) {
+                  const quantity = Number(product.availableQuantity || 0);
 
-          if [ "$CURRENT_STATE" != "$PREVIOUS_STATE" ]; then
-            echo "$CURRENT_STATE" > state.txt
+                  products.push({
+                    name: product.name || 'Ukjent produkt',
+                    venue: product.venue || '',
+                    quantity
+                  });
+                }
+              }
 
-            git config user.name "NFF Ticket Monitor"
-            git config user.email "actions@github.com"
+              const availableProducts = products.filter(
+                product => product.quantity > 0
+              );
 
-            git add state.txt
-            git commit -m "Update ticket state: $CURRENT_STATE"
+              const resaleItemsCount = Array.isArray(data.resaleItems)
+                ? data.resaleItems.length
+                : 0;
 
-            git pull --rebase origin main
-            git push origin main
+              console.log(`Antall produkter i API: ${products.length}`);
+              console.log(`ResaleItems: ${resaleItemsCount}`);
 
-          else
-            echo "Status uendret."
-          fi
+              if (availableProducts.length > 0 || resaleItemsCount > 0) {
+                const currentState = 'available';
+
+                const previousState =
+                  fs.existsSync('state.txt')
+                    ? fs.readFileSync('state.txt', 'utf8').trim()
+                    : 'unknown';
+
+                console.log(`Forrige status: ${previousState}`);
+                console.log(`Ny status: ${currentState}`);
+
+                const details = availableProducts
+                  .map(product =>
+                    `${product.name}: ${product.quantity} billett(er)` +
+                    (product.venue ? `, ${product.venue}` : '')
+                  )
+                  .join('\n');
+
+                console.log('MULIG RESALE-BILLETT FUNNET!');
+                console.log(details);
+
+                if (previousState !== currentState) {
+                  await sendNtfy(
+                    'NFF resale - BILLETTER!',
+                    `Mulig tilgjengelig resale-billett:\n\n${details}\n\nSjekk NFF-siden med en gang.`,
+                    'urgent'
+                  );
+                }
+
+                fs.writeFileSync('state.txt', currentState);
+
+                if (previousState !== currentState) {
+                  await commitState(currentState);
+                }
+
+              } else {
+                const currentState = 'empty';
+
+                const previousState =
+                  fs.existsSync('state.txt')
+                    ? fs.readFileSync('state.txt', 'utf8').trim()
+                    : 'unknown';
+
+                console.log('Ingen resale-billetter tilgjengelig.');
+                console.log(`Forrige status: ${previousState}`);
+                console.log(`Ny status: ${currentState}`);
+
+                if (previousState !== currentState) {
+                  fs.writeFileSync('state.txt', currentState);
+                  await commitState(currentState);
+                } else {
+                  console.log('Status uendret.');
+                }
+              }
+
+            } finally {
+              await browser.close();
+            }
+          }
+
+          async function commitState(currentState) {
+            const { execSync } = require('child_process');
+
+            execSync('git config user.name "NFF Ticket Monitor"');
+            execSync('git config user.email "actions@github.com"');
+
+            execSync('git add state.txt');
+
+            try {
+              execSync(
+                `git commit -m "Update ticket state: ${currentState}"`
+              );
+            } catch {
+              console.log('Ingen ny state-commit nødvendig.');
+              return;
+            }
+
+            execSync('git pull --rebase origin main');
+            execSync('git push origin main');
+
+            console.log('State pushet til GitHub.');
+          }
+
+          main().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
