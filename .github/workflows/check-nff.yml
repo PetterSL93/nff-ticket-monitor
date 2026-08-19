@@ -134,12 +134,12 @@ jobs:
                 }`
               );
 
+              const pageTitle = await page.title();
+
               console.log(
-                `NFF-side title: ${await page.title()}`
+                `NFF-side title: ${pageTitle}`
               );
 
-              // Gi siden litt tid til å sette cookies / fullføre
-              // eventuelle redirects eller scripts.
               await page.waitForLoadState('networkidle', {
                 timeout: 30000
               }).catch(() => {
@@ -148,51 +148,148 @@ jobs:
                 );
               });
 
-              console.log(
-                'Henter resale-API via Playwright med samme nettleserkontekst...'
-              );
+              let currentState;
 
-              const apiResponse =
-                await context.request.get(NFF_API, {
-                  headers: {
-                    'Accept': 'application/json',
-                    'Referer': NFF_PAGE
-                  },
-                  timeout: 60000
-                });
+              // Hvis NFF viser Waiting Room, skal dette
+              // regnes som kø og ikke som unknown.
+              if (
+                pageTitle.toLowerCase().includes('waiting room')
+              ) {
+                currentState = 'queue';
 
-              const apiStatus = apiResponse.status();
-              const apiContentType =
-                apiResponse.headers()['content-type'] || '';
-
-              const apiText = await apiResponse.text();
-
-              console.log(`API HTTP-status: ${apiStatus}`);
-              console.log(
-                `API Content-Type: ${apiContentType}`
-              );
-
-              if (apiStatus !== 200) {
-                throw new Error(
-                  `NFF API returnerte HTTP ${apiStatus}`
+                console.log(
+                  'NFF viser Waiting Room. Ingen billettvarsling.'
                 );
+
+              } else {
+                console.log(
+                  'Henter resale-API via Playwright med samme nettleserkontekst...'
+                );
+
+                const apiResponse =
+                  await context.request.get(NFF_API, {
+                    headers: {
+                      'Accept': 'application/json',
+                      'Referer': NFF_PAGE
+                    },
+                    timeout: 60000
+                  });
+
+                const apiStatus = apiResponse.status();
+                const apiContentType =
+                  apiResponse.headers()['content-type'] || '';
+
+                const apiText = await apiResponse.text();
+
+                console.log(
+                  `API HTTP-status: ${apiStatus}`
+                );
+
+                console.log(
+                  `API Content-Type: ${apiContentType}`
+                );
+
+                if (apiStatus !== 200) {
+                  throw new Error(
+                    `NFF API returnerte HTTP ${apiStatus}`
+                  );
+                }
+
+                let data = null;
+
+                try {
+                  data = JSON.parse(apiText);
+                } catch {
+                  console.log(
+                    'API-responsen er ikke gyldig JSON.'
+                  );
+
+                  console.log(
+                    'Første 1000 tegn av responsen:'
+                  );
+
+                  console.log(
+                    apiText.slice(0, 1000)
+                  );
+
+                  currentState = 'unknown';
+                }
+
+                if (data) {
+                  const products = [];
+
+                  for (
+                    const topic of
+                    (data.topicWithProductsList || [])
+                  ) {
+                    for (
+                      const product of
+                      (topic.products || [])
+                    ) {
+                      const quantity =
+                        Number(
+                          product.availableQuantity || 0
+                        );
+
+                      products.push({
+                        name:
+                          product.name ||
+                          'Ukjent produkt',
+
+                        venue:
+                          product.venue ||
+                          '',
+
+                        quantity
+                      });
+                    }
+                  }
+
+                  const availableProducts =
+                    products.filter(
+                      product => product.quantity > 0
+                    );
+
+                  const resaleItemsCount =
+                    Array.isArray(data.resaleItems)
+                      ? data.resaleItems.length
+                      : 0;
+
+                  console.log(
+                    `Antall produkter i API: ${products.length}`
+                  );
+
+                  console.log(
+                    `ResaleItems: ${resaleItemsCount}`
+                  );
+
+                  for (const product of products) {
+                    console.log(
+                      `Produkt: ${product.name} | ` +
+                      `Antall: ${product.quantity} | ` +
+                      `Sted: ${product.venue}`
+                    );
+                  }
+
+                  if (
+                    availableProducts.length > 0 ||
+                    resaleItemsCount > 0
+                  ) {
+                    currentState = 'available';
+
+                    console.log(
+                      'MULIG RESALE-BILLETT FUNNET!'
+                    );
+
+                  } else {
+                    currentState = 'empty';
+
+                    console.log(
+                      'Ingen resale-billetter tilgjengelig.'
+                    );
+                  }
+                }
               }
-
-              let data;
-
-              try {
-                data = JSON.parse(apiText);
-              } catch (error) {
-                console.log(
-                  'API-responsen er ikke gyldig JSON.'
-                );
-
-                console.log(
-                  'Første 1000 tegn av responsen:'
-                );
-
-                console.log(apiText.slice(0, 1000));
-
                 const previousState = getPreviousState();
                 const currentState = 'unknown';
 
