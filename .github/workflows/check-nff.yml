@@ -42,9 +42,16 @@ jobs:
 
           echo "HTTP-status: $HTTP_CODE"
 
-          echo "DEBUG: søker etter kjennetegn på kø/venterom..."
-          grep -Eio ".{0,100}(queue|waiting room|venterom|venterommet|captcha|characters|submit).{0,100}" /tmp/nff-page.html | head -20 || true
+          echo "DEBUG: title fra NFF:"
+          grep -Eio "<title[^>]*>[^<]*</title>" /tmp/nff-page.html | head -3 || true
 
+          echo "DEBUG: første 1000 tegn av responsen:"
+          head -c 1000 /tmp/nff-page.html || true
+
+          echo
+          echo "DEBUG: størrelse på respons:"
+          wc -c /tmp/nff-page.html
+          
           if [ "$HTTP_CODE" != "200" ]; then
             echo "NFF returnerte HTTP $HTTP_CODE."
             exit 1
