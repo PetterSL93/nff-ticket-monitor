@@ -3,6 +3,10 @@ name: NFF Resale Monitor
 on:
   workflow_dispatch:
 
+concurrency:
+  group: nff-ticket-monitor
+  cancel-in-progress: false
+  
 permissions:
   contents: write
 
@@ -81,7 +85,10 @@ jobs:
 
             git add state.txt
             git commit -m "Update ticket state: $CURRENT_STATE"
-            git push
+
+            git pull --rebase origin main
+            git push origin main
+
           else
             echo "Status uendret."
           fi
