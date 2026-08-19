@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   check-tickets:
+    timeout-minutes: 2
     runs-on: ubuntu-latest
 
     steps:
@@ -26,7 +27,7 @@ jobs:
       - name: Installer Playwright
         run: |
           npm install playwright
-          npx playwright install --with-deps chromium
+          timeout 90s npx playwright install --only-shell
 
       - name: Sjekk NFF resale
         env:
