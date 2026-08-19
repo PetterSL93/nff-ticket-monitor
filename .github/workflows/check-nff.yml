@@ -36,7 +36,7 @@ jobs:
             --connect-timeout 20 \
             --max-time 60 \
             --user-agent "Mozilla/5.0" \
-            --output page.html \
+            --output /tmp/nff-page.html \
             --write-out "%{http_code}" \
             "$URL")
 
@@ -47,15 +47,15 @@ jobs:
             exit 1
           fi
 
-          if grep -Fqi "$EMPTY_TEXT" page.html; then
+          if grep -Fqi "$EMPTY_TEXT" /tmp/nff-page.html; then
             CURRENT_STATE="empty"
             echo "Ingen resale-billetter funnet."
 
-          elif grep -Eqi "Du er nå i køen|venterommet|waiting room|queue" page.html; then
+          elif grep -Eqi "Du er nå i køen|venterommet|waiting room|queue" /tmp/nff-page.html; then
             CURRENT_STATE="queue"
             echo "NFF viser kø/venterom. Ingen billettvarsling."
 
-          elif grep -Eqi "[0-9]+[[:space:]]+billetter" page.html && grep -Fqi "KJØP" page.html; then
+          elif grep -Eqi "[0-9]+[[:space:]]+billetter" /tmp/nff-page.html && grep -Fqi "KJØP" /tmp/nff-page.html; then
             CURRENT_STATE="available"
             echo "Mulig resale-billett funnet!"
 
