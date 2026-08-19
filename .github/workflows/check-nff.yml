@@ -22,10 +22,9 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          URL="https://resale.fotball.no/list/resaleProducts/?lang=no"
-          EMPTY_TEXT="There are currently no tickets being resold"
+          URL="https://resale.fotball.no/list/resale/resaleProductCatalog.json?lang=no"
 
-          echo "Henter NFF resale-side..."
+          echo "Henter NFF resale-API..."
 
           HTTP_CODE=$(curl \
             --location \
@@ -36,48 +35,46 @@ jobs:
             --connect-timeout 20 \
             --max-time 60 \
             --user-agent "Mozilla/5.0" \
-            --output /tmp/nff-page.html \
+            --header "Accept: application/json" \
+            --output /tmp/nff-resale.json \
             --write-out "%{http_code}" \
             "$URL")
 
           echo "HTTP-status: $HTTP_CODE"
 
-          echo "DEBUG: title fra NFF:"
-          grep -Eio "<title[^>]*>[^<]*</title>" /tmp/nff-page.html | head -3 || true
-
-          echo "DEBUG: første 1000 tegn av responsen:"
-          head -c 1000 /tmp/nff-page.html || true
-
-          echo
-          echo "DEBUG: størrelse på respons:"
-          wc -c /tmp/nff-page.html
-          
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "NFF returnerte HTTP $HTTP_CODE."
+            echo "NFF API returnerte HTTP $HTTP_CODE."
             exit 1
           fi
 
-          if grep -Fqi "Cookies appear to be disabled in your browser" /tmp/nff-page.html || \
-             grep -Fqi "This site requires browser cookies to function correctly" /tmp/nff-page.html; then
-            CURRENT_STATE="blocked"
-            echo "NFF krever cookies/nettlesersesjon. Ingen billettvarsling."
+          if ! jq empty /tmp/nff-resale.json 2>/dev/null; then
+            echo "Responsen er ikke gyldig JSON."
+            exit 1
+          fi
 
-          elif grep -Fqi "$EMPTY_TEXT" /tmp/nff-page.html; then
-            CURRENT_STATE="empty"
-            echo "Ingen resale-billetter funnet."
+          AVAILABLE_QUANTITY=$(jq '
+            [
+              .topicWithProductsList[]?.products[]?.availableQuantity
+              | select(type == "number")
+            ]
+            | add // 0
+          ' /tmp/nff-resale.json)
 
-          elif grep -Eqi "Du er nå i køen|venterommet|waiting room|To enter the waiting room|New captcha|Characters:|SUBMIT" /tmp/nff-page.html; then
-            CURRENT_STATE="queue"
-            echo "NFF viser kø/venterom. Ingen billettvarsling."
+          RESALE_ITEMS=$(jq '
+            (.resaleItems // [])
+            | length
+          ' /tmp/nff-resale.json)
 
-          elif grep -Eqi "[0-9]+[[:space:]]+billetter" /tmp/nff-page.html && grep -Fqi "KJØP" /tmp/nff-page.html; then
+          echo "Tilgjengelig antall: $AVAILABLE_QUANTITY"
+          echo "Antall resale-items: $RESALE_ITEMS"
+
+          if [ "$AVAILABLE_QUANTITY" -gt 0 ] || [ "$RESALE_ITEMS" -gt 0 ]; then
             CURRENT_STATE="available"
-            echo "Mulig resale-billett funnet!"
+            echo "MULIG RESALE-BILLETT FUNNET!"
 
           else
-            CURRENT_STATE="unknown"
-            echo "Siden er verken cookie-side, tom-side, køside eller en kjent billettside."
-            echo "Varsler ikke som billett."
+            CURRENT_STATE="empty"
+            echo "Ingen resale-billetter tilgjengelig."
           fi
 
           PREVIOUS_STATE=$(cat state.txt 2>/dev/null || echo "unknown")
