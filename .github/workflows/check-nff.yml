@@ -51,7 +51,7 @@ jobs:
             CURRENT_STATE="empty"
             echo "Ingen resale-billetter funnet."
 
-          elif grep -Eqi "Du er nå i køen|venterommet|waiting room|queue" /tmp/nff-page.html; then
+          elif grep -Eqi "Du er nå i køen|venterommet|waiting room|To enter the waiting room|New captcha|Characters:|SUBMIT" /tmp/nff-page.html; then
             CURRENT_STATE="queue"
             echo "NFF viser kø/venterom. Ingen billettvarsling."
 
