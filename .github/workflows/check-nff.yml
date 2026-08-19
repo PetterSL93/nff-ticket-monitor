@@ -119,8 +119,3 @@ jobs:
           else
             echo "Status uendret."
           fi
-
-
-          else
-            echo "Status uendret."
-          fi
