@@ -49,8 +49,20 @@ jobs:
 
           if ! jq empty /tmp/nff-resale.json 2>/dev/null; then
             echo "Responsen er ikke gyldig JSON."
+            echo "DEBUG: content-type:"
+            file /tmp/nff-resale.json
+
+            echo "DEBUG: første 1000 tegn av API-responsen:"
+            head -c 1000 /tmp/nff-resale.json || true
+
+            echo
+            echo "DEBUG: størrelse:"
+            wc -c /tmp/nff-resale.json
+
             exit 1
           fi
+
+
 
           AVAILABLE_QUANTITY=$(jq '
             [
