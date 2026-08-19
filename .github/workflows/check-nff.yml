@@ -45,6 +45,43 @@ jobs:
 
           const NTFY_TOPIC = process.env.NTFY_TOPIC;
 
+          function getPreviousState() {
+            if (!fs.existsSync('state.txt')) {
+              return 'unknown';
+            }
+
+            return fs.readFileSync('state.txt', 'utf8').trim();
+          }
+
+          function saveState(state) {
+            fs.writeFileSync('state.txt', state + '\n');
+          }
+
+          function commitState(state) {
+            execSync('git config user.name "NFF Ticket Monitor"');
+            execSync('git config user.email "actions@github.com"');
+
+            // Hent eventuelle nye commits før vi oppdaterer state.
+            execSync('git pull --rebase origin main');
+
+            fs.writeFileSync('state.txt', state + '\n');
+
+            execSync('git add state.txt');
+
+            try {
+              execSync(
+                `git commit -m "Update ticket state: ${state}"`
+              );
+            } catch {
+              console.log('Ingen state-endring å committe.');
+              return;
+            }
+
+            execSync('git push origin main');
+
+            console.log('State pushet til GitHub.');
+          }
+
           async function sendNtfy(title, message, priority) {
             if (!NTFY_TOPIC) {
               throw new Error('NTFY_TOPIC mangler.');
@@ -72,39 +109,6 @@ jobs:
             console.log('ntfy-varsel sendt.');
           }
 
-          function getPreviousState() {
-            if (!fs.existsSync('state.txt')) {
-              return 'unknown';
-            }
-
-            return fs.readFileSync('state.txt', 'utf8').trim();
-          }
-
-          function saveState(state) {
-            fs.writeFileSync('state.txt', state + '\n');
-          }
-
-          function commitState(state) {
-            execSync('git config user.name "NFF Ticket Monitor"');
-            execSync('git config user.email "actions@github.com"');
-
-            execSync('git add state.txt');
-
-            try {
-              execSync(
-                `git commit -m "Update ticket state: ${state}"`
-              );
-            } catch (error) {
-              console.log('Ingen ny state-commit nødvendig.');
-              return;
-            }
-
-            execSync('git pull --rebase origin main');
-            execSync('git push origin main');
-
-            console.log('State pushet til GitHub.');
-          }
-
           async function main() {
             const browser = await chromium.launch({
               headless: true
@@ -119,6 +123,8 @@ jobs:
             });
 
             const page = await context.newPage();
+
+            let currentState = 'unknown';
 
             try {
               console.log('Åpner NFF resale-side i Chromium...');
@@ -144,14 +150,11 @@ jobs:
                 timeout: 30000
               }).catch(() => {
                 console.log(
-                  'networkidle ble ikke nådd - fortsetter likevel.'
+                  'networkidle ble ikke nådd - fortsetter.'
                 );
               });
 
-              let currentState;
-
-              // Hvis NFF viser Waiting Room, skal dette
-              // regnes som kø og ikke som unknown.
+              // Kø / Waiting Room
               if (
                 pageTitle.toLowerCase().includes('waiting room')
               ) {
@@ -162,20 +165,23 @@ jobs:
                 );
 
               } else {
+                // Normal resale-side:
+                // hent API med samme Playwright browser context.
                 console.log(
-                  'Henter resale-API via Playwright med samme nettleserkontekst...'
+                  'Henter resale-API via Playwright...'
                 );
 
                 const apiResponse =
                   await context.request.get(NFF_API, {
                     headers: {
-                      'Accept': 'application/json',
-                      'Referer': NFF_PAGE
+                      Accept: 'application/json',
+                      Referer: NFF_PAGE
                     },
                     timeout: 60000
                   });
 
                 const apiStatus = apiResponse.status();
+
                 const apiContentType =
                   apiResponse.headers()['content-type'] || '';
 
@@ -195,7 +201,7 @@ jobs:
                   );
                 }
 
-                let data = null;
+                let data;
 
                 try {
                   data = JSON.parse(apiText);
@@ -205,12 +211,10 @@ jobs:
                   );
 
                   console.log(
-                    'Første 1000 tegn av responsen:'
+                    'Første 500 tegn av API-responsen:'
                   );
 
-                  console.log(
-                    apiText.slice(0, 1000)
-                  );
+                  console.log(apiText.slice(0, 500));
 
                   currentState = 'unknown';
                 }
@@ -227,19 +231,13 @@ jobs:
                       (topic.products || [])
                     ) {
                       const quantity =
-                        Number(
-                          product.availableQuantity || 0
-                        );
+                        Number(product.availableQuantity || 0);
 
                       products.push({
                         name:
-                          product.name ||
-                          'Ukjent produkt',
-
+                          product.name || 'Ukjent produkt',
                         venue:
-                          product.venue ||
-                          '',
-
+                          product.venue || '',
                         quantity
                       });
                     }
@@ -290,130 +288,8 @@ jobs:
                   }
                 }
               }
-                const previousState = getPreviousState();
-                currentState = 'unknown';
-
-                console.log(
-                  `Forrige status: ${previousState}`
-                );
-
-                console.log(
-                  `Ny status: ${currentState}`
-                );
-
-                if (previousState !== currentState) {
-                  await sendNtfy(
-                    'NFF resale - ukjent endring',
-                    'NFF API svarte med noe annet enn forventet. Sjekk siden manuelt.',
-                    'high'
-                  );
-
-                  saveState(currentState);
-                  commitState(currentState);
-                }
-
-                return;
-              }
-
-              const products = [];
-
-              for (
-                const topic of
-                (data.topicWithProductsList || [])
-              ) {
-                for (
-                  const product of
-                  (topic.products || [])
-                ) {
-                  const quantity =
-                    Number(product.availableQuantity || 0);
-
-                  products.push({
-                    name:
-                      product.name ||
-                      'Ukjent produkt',
-
-                    venue:
-                      product.venue ||
-                      '',
-
-                    quantity
-                  });
-                }
-              }
-
-              const availableProducts =
-                products.filter(
-                  product => product.quantity > 0
-                );
-
-              const resaleItemsCount =
-                Array.isArray(data.resaleItems)
-                  ? data.resaleItems.length
-                  : 0;
-
-              console.log(
-                `Antall produkter i API: ${products.length}`
-              );
-
-              console.log(
-                `ResaleItems: ${resaleItemsCount}`
-              );
-
-              for (const product of products) {
-                console.log(
-                  `Produkt: ${product.name} | ` +
-                  `Antall: ${product.quantity} | ` +
-                  `Sted: ${product.venue}`
-                );
-              }
 
               const previousState = getPreviousState();
-
-              let currentState;
-
-              if (
-                availableProducts.length > 0 ||
-                resaleItemsCount > 0
-              ) {
-                currentState = 'available';
-
-                console.log(
-                  'MULIG RESALE-BILLETT FUNNET!'
-                );
-
-                const details =
-                  availableProducts
-                    .map(product =>
-                      `${product.name}: ` +
-                      `${product.quantity} billett(er)` +
-                      (
-                        product.venue
-                          ? `, ${product.venue}`
-                          : ''
-                      )
-                    )
-                    .join('\n');
-
-                console.log(details);
-
-                if (
-                  previousState !== 'available'
-                ) {
-                  await sendNtfy(
-                    'NFF resale - BILLETTER!',
-                    `Mulig tilgjengelig resale-billett:\n\n${details}\n\nSjekk NFF-siden med en gang.`,
-                    'urgent'
-                  );
-                }
-
-              } else {
-                currentState = 'empty';
-
-                console.log(
-                  'Ingen resale-billetter tilgjengelig.'
-                );
-              }
 
               console.log(
                 `Forrige status: ${previousState}`
@@ -423,15 +299,92 @@ jobs:
                 `Ny status: ${currentState}`
               );
 
+              // Ekte billettfunn
               if (
-                currentState !== previousState
+                currentState === 'available' &&
+                previousState !== 'available'
               ) {
-                saveState(currentState);
+                let message =
+                  'Mulig tilgjengelig resale-billett. ' +
+                  'Sjekk NFF-siden med en gang.';
+
+                try {
+                  const apiResponse =
+                    await context.request.get(NFF_API, {
+                      headers: {
+                        Accept: 'application/json',
+                        Referer: NFF_PAGE
+                      },
+                      timeout: 30000
+                    });
+
+                  const data =
+                    await apiResponse.json();
+
+                  const availableProducts = [];
+
+                  for (
+                    const topic of
+                    (data.topicWithProductsList || [])
+                  ) {
+                    for (
+                      const product of
+                      (topic.products || [])
+                    ) {
+                      const quantity =
+                        Number(product.availableQuantity || 0);
+
+                      if (quantity > 0) {
+                        availableProducts.push(
+                          `${product.name || 'Ukjent produkt'}: ` +
+                          `${quantity} billett(er)` +
+                          (
+                            product.venue
+                              ? `, ${product.venue}`
+                              : ''
+                          )
+                        );
+                      }
+                    }
+                  }
+
+                  if (availableProducts.length > 0) {
+                    message =
+                      availableProducts.join('\n');
+                  }
+
+                } catch {
+                  console.log(
+                    'Kunne ikke hente detaljer til ntfy-meldingen.'
+                  );
+                }
+
+                await sendNtfy(
+                  'NFF resale - BILLETTER!',
+                  `${message}\n\nSjekk NFF-siden med en gang.`,
+                  'urgent'
+                );
+              }
+
+              // Ukjent endring
+              else if (
+                currentState === 'unknown' &&
+                previousState !== 'unknown'
+              ) {
+                await sendNtfy(
+                  'NFF resale - ukjent endring',
+                  'NFF resale-siden svarte på en uventet måte. ' +
+                  'Dette kan være en sideendring eller noe annet. ' +
+                  'Sjekk siden manuelt.',
+                  'high'
+                );
+              }
+
+              // Oppdater state bare ved endring
+              if (currentState !== previousState) {
                 commitState(currentState);
               } else {
-                console.log(
-                  'Status uendret.'
-                );
+                console.log('Status uendret.');
               }
 
             } finally {
