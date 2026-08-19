@@ -57,7 +57,12 @@ jobs:
             exit 1
           fi
 
-          if grep -Fqi "$EMPTY_TEXT" /tmp/nff-page.html; then
+          if grep -Fqi "Cookies appear to be disabled in your browser" /tmp/nff-page.html || \
+             grep -Fqi "This site requires browser cookies to function correctly" /tmp/nff-page.html; then
+            CURRENT_STATE="blocked"
+            echo "NFF krever cookies/nettlesersesjon. Ingen billettvarsling."
+
+          elif grep -Fqi "$EMPTY_TEXT" /tmp/nff-page.html; then
             CURRENT_STATE="empty"
             echo "Ingen resale-billetter funnet."
 
@@ -71,7 +76,7 @@ jobs:
 
           else
             CURRENT_STATE="unknown"
-            echo "Siden er verken tom-siden, køsiden eller en kjent billettside."
+            echo "Siden er verken cookie-side, tom-side, køside eller en kjent billettside."
             echo "Varsler ikke som billett."
           fi
 
