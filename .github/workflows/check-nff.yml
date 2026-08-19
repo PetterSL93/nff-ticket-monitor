@@ -291,7 +291,7 @@ jobs:
                 }
               }
                 const previousState = getPreviousState();
-                const currentState = 'unknown';
+                currentState = 'unknown';
 
                 console.log(
                   `Forrige status: ${previousState}`
