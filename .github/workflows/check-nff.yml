@@ -120,17 +120,6 @@ jobs:
             echo "Status uendret."
           fi
 
-          if [ "$CURRENT_STATE" != "$PREVIOUS_STATE" ]; then
-            echo "$CURRENT_STATE" > state.txt
-
-            git config user.name "NFF Ticket Monitor"
-            git config user.email "actions@github.com"
-
-            git add state.txt
-            git commit -m "Update ticket state: $CURRENT_STATE"
-
-            git pull --rebase origin main
-            git push origin main
 
           else
             echo "Status uendret."
