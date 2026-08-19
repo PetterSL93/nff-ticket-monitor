@@ -52,13 +52,17 @@ jobs:
             echo "Ingen resale-billetter funnet."
 
           elif grep -Eqi "Du er nå i køen|venterommet|waiting room|queue" page.html; then
-              CURRENT_STATE="queue"
-          echo "NFF viser kø/venterom. Ingen billettvarsling."
+            CURRENT_STATE="queue"
+            echo "NFF viser kø/venterom. Ingen billettvarsling."
+
+          elif grep -Eqi "[0-9]+[[:space:]]+billetter" page.html && grep -Fqi "KJØP" page.html; then
+            CURRENT_STATE="available"
+            echo "Mulig resale-billett funnet!"
 
           else
             CURRENT_STATE="unknown"
-            echo "Siden er verken tom-siden eller en kjent køside."
-            echo "Varsler IKKE om billetter."
+            echo "Siden er verken tom-siden, køsiden eller en kjent billettside."
+            echo "Varsler ikke som billett."
           fi
 
           PREVIOUS_STATE=$(cat state.txt 2>/dev/null || echo "unknown")
