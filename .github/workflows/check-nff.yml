@@ -68,7 +68,7 @@ jobs:
 
           if [ "$CURRENT_STATE" = "available" ] && [ "$PREVIOUS_STATE" != "available" ]; then
 
-            MESSAGE="NFF sin resale-side viser ikke lenger meldingen om at det er tomt. Det kan ha blitt lagt ut billetter. Sjekk siden med en gang."
+            MESSAGE="NFF sin resale-side viser tegn til tilgjengelige billetter. Sjekk siden med en gang."
 
             curl \
               --fail \
@@ -81,6 +81,39 @@ jobs:
               "https://ntfy.sh/$NTFY_TOPIC"
 
             echo "Varsel sendt."
+
+          elif [ "$CURRENT_STATE" = "unknown" ] && [ "$PREVIOUS_STATE" != "unknown" ]; then
+
+            MESSAGE="NFF resale-siden ser annerledes ut enn forventet. Dette kan være billetter, en sideendring eller noe annet. Sjekk siden manuelt."
+
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              -H "Title: NFF resale - ukjent endring" \
+              -H "Priority: high" \
+              -H "Click: $URL" \
+              -d "$MESSAGE" \
+              "https://ntfy.sh/$NTFY_TOPIC"
+
+            echo "Unknown-varsel sendt."
+
+          fi
+
+          if [ "$CURRENT_STATE" != "$PREVIOUS_STATE" ]; then
+            echo "$CURRENT_STATE" > state.txt
+
+            git config user.name "NFF Ticket Monitor"
+            git config user.email "actions@github.com"
+
+            git add state.txt
+            git commit -m "Update ticket state: $CURRENT_STATE"
+
+            git pull --rebase origin main
+            git push origin main
+
+          else
+            echo "Status uendret."
           fi
 
           if [ "$CURRENT_STATE" != "$PREVIOUS_STATE" ]; then
