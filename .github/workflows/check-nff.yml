@@ -1,19 +1,15 @@
-name: NFF Resale Monitor
+name: NFF Resale Monitor Test
 
 on:
   workflow_dispatch:
 
-concurrency:
-  group: nff-ticket-monitor
-  cancel-in-progress: false
-
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  check-tickets:
-    timeout-minutes: 2
+  test-nff:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Hent repository
@@ -24,43 +20,12 @@ jobs:
         with:
           node-version: 22
 
-      - name: Sjekk runner-IP
-        run: |
-          echo "Runner public IP:"
-          curl -4 https://api.ipify.org
-          echo
-
       - name: Installer Playwright
         run: |
           npm install playwright
-          timeout 90s npx playwright install --only-shell
+          npx playwright install --with-deps chromium
 
-      - name: Debug NFF redirect
-        run: |
-          echo "=== Runner public IP ==="
-          curl -4 -s https://api.ipify.org
-          echo
-          echo
-
-          echo "=== NFF response headers ==="
-          curl \
-            -4 \
-            -sS \
-            -D /tmp/nff-headers.txt \
-            -o /tmp/nff-body.html \
-            --max-redirs 0 \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36" \
-            "https://resale.fotball.no/list/resaleProductCatalog.json?lang=no" \
-            || true
-
-          cat /tmp/nff-headers.txt
-
-          echo
-          echo "=== First 1000 chars of response ==="
-          head -c 1000 /tmp/nff-body.html || true
-          echo
-        
-      - name: Debug Playwright redirect
+      - name: Test headed Chromium mot NFF
         run: |
           cat > debug-nff.js <<'EOF'
           const { chromium } = require('playwright');
@@ -70,11 +35,15 @@ jobs:
 
           (async () => {
             const browser = await chromium.launch({
-              headless: true
+              headless: false
             });
 
             const context = await browser.newContext({
               locale: 'nb-NO',
+              viewport: {
+                width: 1920,
+                height: 1080
+              },
               userAgent:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
                 'AppleWebKit/537.36 (KHTML, like Gecko) ' +
@@ -88,7 +57,8 @@ jobs:
 
               if (
                 url.includes('resale.fotball.no') ||
-                url.includes('secutix.com')
+                url.includes('secutix.com') ||
+                url.includes('captcha-delivery.com')
               ) {
                 console.log(
                   `RESPONSE ${response.status()} ${url}`
@@ -109,7 +79,7 @@ jobs:
             });
 
             try {
-              console.log('Åpner NFF...');
+              console.log('Åpner NFF i headed Chromium...');
 
               const response = await page.goto(URL, {
                 waitUntil: 'domcontentloaded',
@@ -122,22 +92,56 @@ jobs:
                 }`
               );
 
-              await page.waitForTimeout(10000);
-
-              console.log(`Final URL: ${page.url()}`);
-              console.log(`Title: ${await page.title()}`);
-
-              console.log('Venter 15 sekunder til...');
-
-              await page.waitForTimeout(15000);
-
               console.log(
-                `Final URL etter venting: ${page.url()}`
+                `URL etter goto: ${page.url()}`
               );
 
               console.log(
-                `Title etter venting: ${await page.title()}`
+                `Title etter goto: ${await page.title()}`
               );
+
+              console.log(
+                'Venter 30 sekunder for å la kø/cookie-flow fullføre...'
+              );
+
+              await page.waitForTimeout(30000);
+
+              console.log(
+                `URL etter 30 sekunder: ${page.url()}`
+              );
+
+              console.log(
+                `Title etter 30 sekunder: ${await page.title()}`
+              );
+
+              console.log('Tester API-kallet fra browser context...');
+
+              const apiResponse =
+                await context.request.get(URL, {
+                  headers: {
+                    Accept: 'application/json',
+                    Referer: page.url()
+                  },
+                  timeout: 30000
+                });
+
+              console.log(
+                `API status: ${apiResponse.status()}`
+              );
+
+              console.log(
+                `API content-type: ${
+                  apiResponse.headers()['content-type'] || ''
+                }`
+              );
+
+              const text = await apiResponse.text();
+
+              console.log(
+                'Første 500 tegn av API-responsen:'
+              );
+
+              console.log(text.slice(0, 500));
 
             } finally {
               await browser.close();
@@ -148,374 +152,4 @@ jobs:
           });
           EOF
 
-          node debug-nff.js
-          
-      - name: Sjekk NFF resale
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: |
-          node <<'NODE'
-          const { chromium } = require('playwright');
-          const fs = require('fs');
-          const { execSync } = require('child_process');
-
-          const NFF_PAGE =
-            'https://resale.fotball.no/list/resaleProducts/?lang=no';
-
-          const NFF_API =
-            'https://resale.fotball.no/list/resale/resaleProductCatalog.json?lang=no';
-
-          const NTFY_TOPIC = process.env.NTFY_TOPIC;
-
-          function getPreviousState() {
-            if (!fs.existsSync('state.txt')) {
-              return 'unknown';
-            }
-
-            return fs.readFileSync('state.txt', 'utf8').trim();
-          }
-
-          function saveState(state) {
-            fs.writeFileSync('state.txt', state + '\n');
-          }
-
-          function commitState(state) {
-            execSync('git config user.name "NFF Ticket Monitor"');
-            execSync('git config user.email "actions@github.com"');
-
-            // Hent eventuelle nye commits før vi oppdaterer state.
-            execSync('git pull --rebase origin main');
-
-            fs.writeFileSync('state.txt', state + '\n');
-
-            execSync('git add state.txt');
-
-            try {
-              execSync(
-                `git commit -m "Update ticket state: ${state}"`
-              );
-            } catch {
-              console.log('Ingen state-endring å committe.');
-              return;
-            }
-
-            execSync('git push origin main');
-
-            console.log('State pushet til GitHub.');
-          }
-
-          async function sendNtfy(title, message, priority) {
-            if (!NTFY_TOPIC) {
-              throw new Error('NTFY_TOPIC mangler.');
-            }
-
-            const response = await fetch(
-              `https://ntfy.sh/${NTFY_TOPIC}`,
-              {
-                method: 'POST',
-                headers: {
-                  'Title': title,
-                  'Priority': priority,
-                  'Click': NFF_PAGE
-                },
-                body: message
-              }
-            );
-
-            if (!response.ok) {
-              throw new Error(
-                `ntfy returnerte HTTP ${response.status}`
-              );
-            }
-
-            console.log('ntfy-varsel sendt.');
-          }
-
-          async function main() {
-            const browser = await chromium.launch({
-              headless: true
-            });
-
-            const context = await browser.newContext({
-              locale: 'nb-NO',
-              userAgent:
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-                'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-                'Chrome/131.0.0.0 Safari/537.36'
-            });
-
-            const page = await context.newPage();
-
-            let currentState = 'unknown';
-
-            try {
-              console.log('Åpner NFF resale-side i Chromium...');
-
-              const pageResponse = await page.goto(NFF_PAGE, {
-                waitUntil: 'domcontentloaded',
-                timeout: 60000
-              });
-
-              console.log(
-                `NFF-side HTTP-status: ${
-                  pageResponse?.status() ?? 'ukjent'
-                }`
-              );
-
-              const pageTitle = await page.title();
-
-              console.log(
-                `NFF-side title: ${pageTitle}`
-              );
-
-              await page.waitForLoadState('networkidle', {
-                timeout: 30000
-              }).catch(() => {
-                console.log(
-                  'networkidle ble ikke nådd - fortsetter.'
-                );
-              });
-
-              // Kø / Waiting Room
-              if (
-                pageTitle.toLowerCase().includes('waiting room')
-              ) {
-                currentState = 'queue';
-
-                console.log(
-                  'NFF viser Waiting Room. Ingen billettvarsling.'
-                );
-
-              } else {
-                // Normal resale-side:
-                // hent API med samme Playwright browser context.
-                console.log(
-                  'Henter resale-API via Playwright...'
-                );
-
-                const apiResponse =
-                  await context.request.get(NFF_API, {
-                    headers: {
-                      Accept: 'application/json',
-                      Referer: NFF_PAGE
-                    },
-                    timeout: 60000
-                  });
-
-                const apiStatus = apiResponse.status();
-
-                const apiContentType =
-                  apiResponse.headers()['content-type'] || '';
-
-                const apiText = await apiResponse.text();
-
-                console.log(
-                  `API HTTP-status: ${apiStatus}`
-                );
-
-                console.log(
-                  `API Content-Type: ${apiContentType}`
-                );
-
-                if (apiStatus !== 200) {
-                  throw new Error(
-                    `NFF API returnerte HTTP ${apiStatus}`
-                  );
-                }
-
-                let data;
-
-                try {
-                  data = JSON.parse(apiText);
-                } catch {
-                  console.log(
-                    'API-responsen er ikke gyldig JSON.'
-                  );
-
-                  console.log(
-                    'Første 500 tegn av API-responsen:'
-                  );
-
-                  console.log(apiText.slice(0, 500));
-
-                  currentState = 'unknown';
-                }
-
-                if (data) {
-                  const products = [];
-
-                  for (
-                    const topic of
-                    (data.topicWithProductsList || [])
-                  ) {
-                    for (
-                      const product of
-                      (topic.products || [])
-                    ) {
-                      const quantity =
-                        Number(product.availableQuantity || 0);
-
-                      products.push({
-                        name:
-                          product.name || 'Ukjent produkt',
-                        venue:
-                          product.venue || '',
-                        quantity
-                      });
-                    }
-                  }
-
-                  const availableProducts =
-                    products.filter(
-                      product => product.quantity > 0
-                    );
-
-                  const resaleItemsCount =
-                    Array.isArray(data.resaleItems)
-                      ? data.resaleItems.length
-                      : 0;
-
-                  console.log(
-                    `Antall produkter i API: ${products.length}`
-                  );
-
-                  console.log(
-                    `ResaleItems: ${resaleItemsCount}`
-                  );
-
-                  for (const product of products) {
-                    console.log(
-                      `Produkt: ${product.name} | ` +
-                      `Antall: ${product.quantity} | ` +
-                      `Sted: ${product.venue}`
-                    );
-                  }
-
-                  if (
-                    availableProducts.length > 0 ||
-                    resaleItemsCount > 0
-                  ) {
-                    currentState = 'available';
-
-                    console.log(
-                      'MULIG RESALE-BILLETT FUNNET!'
-                    );
-
-                  } else {
-                    currentState = 'empty';
-
-                    console.log(
-                      'Ingen resale-billetter tilgjengelig.'
-                    );
-                  }
-                }
-              }
-
-              const previousState = getPreviousState();
-
-              console.log(
-                `Forrige status: ${previousState}`
-              );
-
-              console.log(
-                `Ny status: ${currentState}`
-              );
-
-              // Ekte billettfunn
-              if (
-                currentState === 'available' &&
-                previousState !== 'available'
-              ) {
-                let message =
-                  'Mulig tilgjengelig resale-billett. ' +
-                  'Sjekk NFF-siden med en gang.';
-
-                try {
-                  const apiResponse =
-                    await context.request.get(NFF_API, {
-                      headers: {
-                        Accept: 'application/json',
-                        Referer: NFF_PAGE
-                      },
-                      timeout: 30000
-                    });
-
-                  const data =
-                    await apiResponse.json();
-
-                  const availableProducts = [];
-
-                  for (
-                    const topic of
-                    (data.topicWithProductsList || [])
-                  ) {
-                    for (
-                      const product of
-                      (topic.products || [])
-                    ) {
-                      const quantity =
-                        Number(product.availableQuantity || 0);
-
-                      if (quantity > 0) {
-                        availableProducts.push(
-                          `${product.name || 'Ukjent produkt'}: ` +
-                          `${quantity} billett(er)` +
-                          (
-                            product.venue
-                              ? `, ${product.venue}`
-                              : ''
-                          )
-                        );
-                      }
-                    }
-                  }
-
-                  if (availableProducts.length > 0) {
-                    message =
-                      availableProducts.join('\n');
-                  }
-
-                } catch {
-                  console.log(
-                    'Kunne ikke hente detaljer til ntfy-meldingen.'
-                  );
-                }
-
-                await sendNtfy(
-                  'NFF resale - BILLETTER!',
-                  `${message}\n\nSjekk NFF-siden med en gang.`,
-                  'urgent'
-                );
-              }
-
-              // Ukjent endring
-              else if (
-                currentState === 'unknown' &&
-                previousState !== 'unknown'
-              ) {
-                await sendNtfy(
-                  'NFF resale - ukjent endring',
-                  'NFF resale-siden svarte på en uventet måte. ' +
-                  'Dette kan være en sideendring eller noe annet. ' +
-                  'Sjekk siden manuelt.',
-                  'high'
-                );
-              }
-
-              // Oppdater state bare ved endring
-              if (currentState !== previousState) {
-                commitState(currentState);
-              } else {
-                console.log('Status uendret.');
-              }
-
-            } finally {
-              await browser.close();
-            }
-          }
-
-          main().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
+          xvfb-run --auto-servernum node debug-nff.js
