@@ -1,4 +1,4 @@
-name: NFF Resale Monitor Test
+name: NFF API Direct Test
 
 on:
   workflow_dispatch:
@@ -7,195 +7,61 @@ permissions:
   contents: read
 
 jobs:
-  check-nff:
+  test-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
 
     steps:
-      - name: Hent repository
-        uses: actions/checkout@v5
-
-      - name: Sett opp Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Installer Playwright
+      - name: Test NFF API
         run: |
-          npm install playwright
-          npx playwright install --with-deps chromium
+          URL="https://resale.fotball.no/list/resale/resaleProductCatalog.json?"
 
-      - name: Test NFF og API
-        run: |
-          cat > test-nff.js <<'EOF'
-          const { chromium } = require('playwright');
+          echo "Henter NFF API direkte..."
 
-          const NFF_PAGE =
-            'https://resale.fotball.no/list/resaleProducts/?';
+          HTTP_CODE=$(curl \
+            --location \
+            --silent \
+            --show-error \
+            --retry 2 \
+            --retry-delay 2 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --user-agent "Mozilla/5.0" \
+            --header "Accept: application/json, text/javascript, */*; q=0.01" \
+            --header "Referer: https://resale.fotball.no/list/resaleProducts/?" \
+            --header "X-Requested-With: XMLHttpRequest" \
+            --output /tmp/nff.json \
+            --write-out "%{http_code}" \
+            "$URL")
 
-          const NFF_API =
-            'https://resale.fotball.no/list/resale/resaleProductCatalog.json?';
+          echo "HTTP-status: $HTTP_CODE"
 
-          (async () => {
-            const browser = await chromium.launch({
-              headless: true
-            });
+          echo "Content-Type:"
+          file /tmp/nff.json
 
-            const context = await browser.newContext({
-              locale: 'nb-NO',
-              viewport: {
-                width: 1920,
-                height: 1080
-              },
-              userAgent:
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-                'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-                'Chrome/153.0.0.0 Safari/537.36'
-            });
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Første 1000 tegn av responsen:"
+            head -c 1000 /tmp/nff.json || true
+            exit 1
+          fi
 
-            const page = await context.newPage();
+          if ! jq empty /tmp/nff.json 2>/dev/null; then
+            echo "Responsen er ikke gyldig JSON."
+            head -c 1000 /tmp/nff.json || true
+            exit 1
+          fi
 
-            try {
-              console.log('1. Åpner NFF resale-side...');
+          echo "API returnerte gyldig JSON."
 
-              const pageResponse = await page.goto(
-                NFF_PAGE,
-                {
-                  waitUntil: 'domcontentloaded',
-                  timeout: 60000
+          echo "Tilgjengelige produkter:"
+
+          jq '
+            [
+              .topicWithProductsList[]?.products[]?
+              | {
+                  name: .name,
+                  venue: .venue,
+                  availableQuantity: .availableQuantity
                 }
-              );
-
-              console.log(
-                `NFF HTTP-status: ${
-                  pageResponse?.status() ?? 'ukjent'
-                }`
-              );
-
-              console.log(
-                `NFF URL: ${page.url()}`
-              );
-
-              console.log(
-                `NFF title: ${await page.title()}`
-              );
-
-              console.log(
-                '2. Venter 10 sekunder...'
-              );
-
-              await page.waitForTimeout(10000);
-
-              console.log(
-                `URL etter venting: ${page.url()}`
-              );
-
-              console.log(
-                `Title etter venting: ${await page.title()}`
-              );
-
-              console.log(
-                '3. Henter API direkte med browser-context...'
-              );
-
-              const apiResponse =
-                await context.request.get(
-                  NFF_API,
-                  {
-                    headers: {
-                      Accept:
-                        'application/json, text/javascript, */*; q=0.01',
-
-                      Referer:
-                        NFF_PAGE,
-
-                      'X-Requested-With':
-                        'XMLHttpRequest'
-                    },
-
-                    timeout: 30000
-                  }
-                );
-
-              console.log(
-                `API HTTP-status: ${apiResponse.status()}`
-              );
-
-              console.log(
-                `API Content-Type: ${
-                  apiResponse.headers()['content-type'] || ''
-                }`
-              );
-
-              const text =
-                await apiResponse.text();
-
-              console.log(
-                '4. Første 1000 tegn av API-responsen:'
-              );
-
-              console.log(
-                text.slice(0, 1000)
-              );
-
-              try {
-                const data =
-                  JSON.parse(text);
-
-                console.log(
-                  '5. API-responsen er gyldig JSON.'
-                );
-
-                console.log(
-                  `resaleItems: ${
-                    Array.isArray(data.resaleItems)
-                      ? data.resaleItems.length
-                      : 0
-                  }`
-                );
-
-                for (
-                  const topic of
-                  (data.topicWithProductsList || [])
-                ) {
-                  for (
-                    const product of
-                    (topic.products || [])
-                  ) {
-                    console.log(
-                      `Produkt: ${
-                        product.name || 'Ukjent'
-                      }`
-                    );
-
-                    console.log(
-                      `availableQuantity: ${
-                        product.availableQuantity
-                      }`
-                    );
-
-                    console.log(
-                      `venue: ${
-                        product.venue || ''
-                      }`
-                    );
-                  }
-                }
-
-              } catch {
-                console.log(
-                  '5. API-responsen er IKKE gyldig JSON.'
-                );
-              }
-
-            } finally {
-              await browser.close();
-            }
-
-          })().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          EOF
-
-          node test-nff.js
+            ]
+          ' /tmp/nff.json
