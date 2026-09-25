@@ -62,7 +62,7 @@ jobs:
         
       - name: Debug Playwright redirect
         run: |
-          cat > /tmp/debug-nff.js <<'EOF'
+          cat > debug-nff.js <<'EOF'
           const { chromium } = require('playwright');
 
           const URL =
@@ -148,7 +148,7 @@ jobs:
           });
           EOF
 
-          node /tmp/debug-nff.js
+          node debug-nff.js
           
       - name: Sjekk NFF resale
         env:
