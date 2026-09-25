@@ -35,6 +35,31 @@ jobs:
           npm install playwright
           timeout 90s npx playwright install --only-shell
 
+      - name: Debug NFF redirect
+        run: |
+          echo "=== Runner public IP ==="
+          curl -4 -s https://api.ipify.org
+          echo
+          echo
+
+          echo "=== NFF response headers ==="
+          curl \
+            -4 \
+            -sS \
+            -D /tmp/nff-headers.txt \
+            -o /tmp/nff-body.html \
+            --max-redirs 0 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36" \
+            "https://resale.fotball.no/list/resaleProductCatalog.json?lang=no" \
+            || true
+
+          cat /tmp/nff-headers.txt
+
+          echo
+          echo "=== First 1000 chars of response ==="
+          head -c 1000 /tmp/nff-body.html || true
+          echo
+          
       - name: Sjekk NFF resale
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
