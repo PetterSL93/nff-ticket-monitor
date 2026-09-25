@@ -1,4 +1,4 @@
-name: NFF API Direct Test
+name: NFF API Retry Test
 
 on:
   workflow_dispatch:
@@ -12,56 +12,63 @@ jobs:
     timeout-minutes: 2
 
     steps:
-      - name: Test NFF API
+      - name: Test NFF API med flere forsøk
         run: |
           URL="https://resale.fotball.no/list/resale/resaleProductCatalog.json?"
 
-          echo "Henter NFF API direkte..."
+          for attempt in 1 2 3; do
+            echo "=============================="
+            echo "Forsøk $attempt av 3"
+            echo "=============================="
 
-          HTTP_CODE=$(curl \
-            --location \
-            --silent \
-            --show-error \
-            --retry 2 \
-            --retry-delay 2 \
-            --connect-timeout 10 \
-            --max-time 30 \
-            --user-agent "Mozilla/5.0" \
-            --header "Accept: application/json, text/javascript, */*; q=0.01" \
-            --header "Referer: https://resale.fotball.no/list/resaleProducts/?" \
-            --header "X-Requested-With: XMLHttpRequest" \
-            --output /tmp/nff.json \
-            --write-out "%{http_code}" \
-            "$URL")
+            rm -f /tmp/nff.json
 
-          echo "HTTP-status: $HTTP_CODE"
+            HTTP_CODE=$(curl \
+              --location \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 20 \
+              --user-agent "Mozilla/5.0" \
+              --header "Accept: application/json, text/javascript, */*; q=0.01" \
+              --header "Referer: https://resale.fotball.no/list/resaleProducts/?" \
+              --header "X-Requested-With: XMLHttpRequest" \
+              --output /tmp/nff.json \
+              --write-out "%{http_code}" \
+              "$URL")
 
-          echo "Content-Type:"
-          file /tmp/nff.json
+            echo "HTTP-status: $HTTP_CODE"
 
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "Første 1000 tegn av responsen:"
-            head -c 1000 /tmp/nff.json || true
-            exit 1
-          fi
+            if [ "$HTTP_CODE" = "200" ] && jq empty /tmp/nff.json 2>/dev/null; then
+              echo "Fikk gyldig JSON!"
 
-          if ! jq empty /tmp/nff.json 2>/dev/null; then
-            echo "Responsen er ikke gyldig JSON."
-            head -c 1000 /tmp/nff.json || true
-            exit 1
-          fi
+              jq '
+                [
+                  .topicWithProductsList[]?.products[]?
+                  | {
+                      name: .name,
+                      venue: .venue,
+                      availableQuantity: .availableQuantity
+                    }
+                ]
+              ' /tmp/nff.json
 
-          echo "API returnerte gyldig JSON."
+              exit 0
+            fi
 
-          echo "Tilgjengelige produkter:"
+            echo "Ikke gyldig katalogrespons."
 
-          jq '
-            [
-              .topicWithProductsList[]?.products[]?
-              | {
-                  name: .name,
-                  venue: .venue,
-                  availableQuantity: .availableQuantity
-                }
-            ]
-          ' /tmp/nff.json
+            if [ -f /tmp/nff.json ]; then
+              echo "Respons:"
+              head -c 500 /tmp/nff.json || true
+              echo
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Venter 5 sekunder..."
+              sleep 5
+            fi
+          done
+
+          echo "Alle tre forsøk mislyktes."
+          exit 1
