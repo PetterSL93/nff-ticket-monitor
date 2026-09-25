@@ -25,13 +25,13 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
-      - name: Test headed Chromium mot NFF
+      - name: Test ekte NFF-resale-side
         run: |
           cat > debug-nff.js <<'EOF'
           const { chromium } = require('playwright');
 
-          const URL =
-            'https://resale.fotball.no/list/resaleProductCatalog.json?lang=no';
+          const PAGE_URL =
+            'https://resale.fotball.no/list/resaleProducts/?';
 
           (async () => {
             const browser = await chromium.launch({
@@ -52,7 +52,7 @@ jobs:
 
             const page = await context.newPage();
 
-            page.on('response', response => {
+            page.on('response', async response => {
               const url = response.url();
 
               if (
@@ -63,25 +63,66 @@ jobs:
                 console.log(
                   `RESPONSE ${response.status()} ${url}`
                 );
+
+                if (url.includes('resaleProductCatalog.json')) {
+                  console.log(
+                    '*** FANT RESALE API-KALLET ***'
+                  );
+
+                  try {
+                    const contentType =
+                      response.headers()['content-type'] || '';
+
+                    console.log(
+                      `API content-type: ${contentType}`
+                    );
+
+                    if (response.ok()) {
+                      const data = await response.json();
+
+                      console.log(
+                        'API JSON mottatt!'
+                      );
+
+                      console.log(
+                        JSON.stringify(data, null, 2)
+                      );
+                    }
+                  } catch (error) {
+                    console.log(
+                      `Kunne ikke lese API-respons: ${error.message}`
+                    );
+                  }
+                }
               }
             });
 
             page.on('requestfailed', request => {
-              console.log(
-                `REQUEST FAILED ${request.url()}`
-              );
+              const url = request.url();
 
-              console.log(
-                `  failure: ${
-                  request.failure()?.errorText || 'ukjent'
-                }`
-              );
+              if (
+                url.includes('resale.fotball.no') ||
+                url.includes('secutix.com') ||
+                url.includes('captcha-delivery.com')
+              ) {
+                console.log(
+                  `REQUEST FAILED ${url}`
+                );
+
+                console.log(
+                  `  failure: ${
+                    request.failure()?.errorText || 'ukjent'
+                  }`
+                );
+              }
             });
 
             try {
-              console.log('Åpner NFF i headed Chromium...');
+              console.log(
+                'Åpner vanlig NFF-resale-side...'
+              );
 
-              const response = await page.goto(URL, {
+              const response = await page.goto(PAGE_URL, {
                 waitUntil: 'domcontentloaded',
                 timeout: 60000
               });
@@ -101,47 +142,22 @@ jobs:
               );
 
               console.log(
-                'Venter 30 sekunder for å la kø/cookie-flow fullføre...'
+                'Venter 90 sekunder og lar siden gjøre sin normale flyt...'
               );
 
-              await page.waitForTimeout(30000);
+              await page.waitForTimeout(90000);
 
               console.log(
-                `URL etter 30 sekunder: ${page.url()}`
-              );
-
-              console.log(
-                `Title etter 30 sekunder: ${await page.title()}`
-              );
-
-              console.log('Tester API-kallet fra browser context...');
-
-              const apiResponse =
-                await context.request.get(URL, {
-                  headers: {
-                    Accept: 'application/json',
-                    Referer: page.url()
-                  },
-                  timeout: 30000
-                });
-
-              console.log(
-                `API status: ${apiResponse.status()}`
+                `URL etter venting: ${page.url()}`
               );
 
               console.log(
-                `API content-type: ${
-                  apiResponse.headers()['content-type'] || ''
-                }`
+                `Title etter venting: ${await page.title()}`
               );
-
-              const text = await apiResponse.text();
 
               console.log(
-                'Første 500 tegn av API-responsen:'
+                'Tester ferdig.'
               );
-
-              console.log(text.slice(0, 500));
 
             } finally {
               await browser.close();
