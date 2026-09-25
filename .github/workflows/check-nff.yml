@@ -60,9 +60,9 @@ jobs:
           head -c 1000 /tmp/nff-body.html || true
           echo
         
-      - name: Debug Playwright redirect
+            - name: Debug Playwright redirect
         run: |
-          node <<'NODE'
+          cat > /tmp/debug-nff.js <<'EOF'
           const { chromium } = require('playwright');
 
           const URL =
@@ -102,7 +102,9 @@ jobs:
               );
 
               console.log(
-                `  failure: ${request.failure()?.errorText || 'ukjent'}`
+                `  failure: ${
+                  request.failure()?.errorText || 'ukjent'
+                }`
               );
             });
 
@@ -115,7 +117,9 @@ jobs:
               });
 
               console.log(
-                `Første response: ${response?.status() ?? 'ukjent'}`
+                `Første response: ${
+                  response?.status() ?? 'ukjent'
+                }`
               );
 
               await page.waitForTimeout(10000);
@@ -127,8 +131,13 @@ jobs:
 
               await page.waitForTimeout(15000);
 
-              console.log(`Final URL etter venting: ${page.url()}`);
-              console.log(`Title etter venting: ${await page.title()}`);
+              console.log(
+                `Final URL etter venting: ${page.url()}`
+              );
+
+              console.log(
+                `Title etter venting: ${await page.title()}`
+              );
 
             } finally {
               await browser.close();
@@ -137,7 +146,10 @@ jobs:
             console.error(error);
             process.exit(1);
           });
-          NODE    
+          EOF
+
+          node /tmp/debug-nff.js
+          
       - name: Sjekk NFF resale
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
