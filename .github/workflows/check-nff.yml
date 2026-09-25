@@ -1,4 +1,4 @@
-name: NFF API Direct Test
+name: NFF Resale Monitor Test
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  test-api:
+  check-nff:
     runs-on: ubuntu-latest
     timeout-minutes: 3
 
@@ -25,13 +25,16 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
-      - name: Test direkte API
+      - name: Test NFF og API
         run: |
-          cat > api-test.js <<'EOF'
+          cat > test-nff.js <<'EOF'
           const { chromium } = require('playwright');
 
-          const API_URL =
-            'https://resale.fotball.no/list/resale/resaleProductCatalog.json';
+          const NFF_PAGE =
+            'https://resale.fotball.no/list/resaleProducts/?';
+
+          const NFF_API =
+            'https://resale.fotball.no/list/resale/resaleProductCatalog.json?';
 
           (async () => {
             const browser = await chromium.launch({
@@ -47,32 +50,16 @@ jobs:
               userAgent:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
                 'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-                'Chrome/131.0.0.0 Safari/537.36'
+                'Chrome/153.0.0.0 Safari/537.36'
             });
 
             const page = await context.newPage();
 
-            page.on('response', response => {
-              const url = response.url();
-
-              if (
-                url.includes('resale.fotball.no') ||
-                url.includes('secutix.com') ||
-                url.includes('captcha-delivery.com')
-              ) {
-                console.log(
-                  `RESPONSE ${response.status()} ${url}`
-                );
-              }
-            });
-
             try {
-              console.log(
-                'Åpner direkte API-URL...'
-              );
+              console.log('1. Åpner NFF resale-side...');
 
-              const response = await page.goto(
-                API_URL,
+              const pageResponse = await page.goto(
+                NFF_PAGE,
                 {
                   waitUntil: 'domcontentloaded',
                   timeout: 60000
@@ -80,95 +67,135 @@ jobs:
               );
 
               console.log(
-                `Første response: ${
-                  response?.status() ?? 'ukjent'
+                `NFF HTTP-status: ${
+                  pageResponse?.status() ?? 'ukjent'
                 }`
               );
 
               console.log(
-                `Final URL: ${page.url()}`
+                `NFF URL: ${page.url()}`
               );
 
               console.log(
-                `Title: ${await page.title()}`
+                `NFF title: ${await page.title()}`
               );
-
-              const contentType =
-                response?.headers()['content-type'] || '';
 
               console.log(
-                `Content-Type: ${contentType}`
+                '2. Venter 10 sekunder...'
               );
 
-              if (response) {
-                const text =
-                  await response.text();
+              await page.waitForTimeout(10000);
 
-                console.log(
-                  'Første 1000 tegn av responsen:'
-                );
+              console.log(
+                `URL etter venting: ${page.url()}`
+              );
 
-                console.log(
-                  text.slice(0, 1000)
-                );
+              console.log(
+                `Title etter venting: ${await page.title()}`
+              );
 
-                try {
-                  const data =
-                    JSON.parse(text);
+              console.log(
+                '3. Henter API direkte med browser-context...'
+              );
 
-                  console.log(
-                    'JSON kunne parses!'
-                  );
+              const apiResponse =
+                await context.request.get(
+                  NFF_API,
+                  {
+                    headers: {
+                      Accept:
+                        'application/json, text/javascript, */*; q=0.01',
 
-                  const products = [];
+                      Referer:
+                        NFF_PAGE,
 
-                  for (
-                    const topic of
-                    (data.topicWithProductsList || [])
-                  ) {
-                    for (
-                      const product of
-                      (topic.products || [])
-                    ) {
-                      products.push({
-                        name:
-                          product.name ||
-                          'Ukjent produkt',
-                        venue:
-                          product.venue ||
-                          '',
-                        availableQuantity:
-                          product.availableQuantity
-                      });
-                    }
+                      'X-Requested-With':
+                        'XMLHttpRequest'
+                    },
+
+                    timeout: 30000
                   }
+                );
 
-                  console.log(
-                    'Produkter:'
-                  );
+              console.log(
+                `API HTTP-status: ${apiResponse.status()}`
+              );
 
-                  console.log(
-                    JSON.stringify(
-                      products,
-                      null,
-                      2
-                    )
-                  );
+              console.log(
+                `API Content-Type: ${
+                  apiResponse.headers()['content-type'] || ''
+                }`
+              );
 
-                } catch {
-                  console.log(
-                    'Responsen er IKKE gyldig JSON.'
-                  );
+              const text =
+                await apiResponse.text();
+
+              console.log(
+                '4. Første 1000 tegn av API-responsen:'
+              );
+
+              console.log(
+                text.slice(0, 1000)
+              );
+
+              try {
+                const data =
+                  JSON.parse(text);
+
+                console.log(
+                  '5. API-responsen er gyldig JSON.'
+                );
+
+                console.log(
+                  `resaleItems: ${
+                    Array.isArray(data.resaleItems)
+                      ? data.resaleItems.length
+                      : 0
+                  }`
+                );
+
+                for (
+                  const topic of
+                  (data.topicWithProductsList || [])
+                ) {
+                  for (
+                    const product of
+                    (topic.products || [])
+                  ) {
+                    console.log(
+                      `Produkt: ${
+                        product.name || 'Ukjent'
+                      }`
+                    );
+
+                    console.log(
+                      `availableQuantity: ${
+                        product.availableQuantity
+                      }`
+                    );
+
+                    console.log(
+                      `venue: ${
+                        product.venue || ''
+                      }`
+                    );
+                  }
                 }
+
+              } catch {
+                console.log(
+                  '5. API-responsen er IKKE gyldig JSON.'
+                );
               }
 
             } finally {
               await browser.close();
             }
+
           })().catch(error => {
             console.error(error);
             process.exit(1);
           });
           EOF
 
-          node api-test.js
+          node test-nff.js
