@@ -60,7 +60,7 @@ jobs:
           head -c 1000 /tmp/nff-body.html || true
           echo
         
-            - name: Debug Playwright redirect
+      - name: Debug Playwright redirect
         run: |
           cat > /tmp/debug-nff.js <<'EOF'
           const { chromium } = require('playwright');
