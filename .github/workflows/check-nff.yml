@@ -59,7 +59,85 @@ jobs:
           echo "=== First 1000 chars of response ==="
           head -c 1000 /tmp/nff-body.html || true
           echo
-          
+        
+      - name: Debug Playwright redirect
+        run: |
+          node <<'NODE'
+          const { chromium } = require('playwright');
+
+          const URL =
+            'https://resale.fotball.no/list/resaleProductCatalog.json?lang=no';
+
+          (async () => {
+            const browser = await chromium.launch({
+              headless: true
+            });
+
+            const context = await browser.newContext({
+              locale: 'nb-NO',
+              userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+                'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+                'Chrome/131.0.0.0 Safari/537.36'
+            });
+
+            const page = await context.newPage();
+
+            page.on('response', response => {
+              const url = response.url();
+
+              if (
+                url.includes('resale.fotball.no') ||
+                url.includes('secutix.com')
+              ) {
+                console.log(
+                  `RESPONSE ${response.status()} ${url}`
+                );
+              }
+            });
+
+            page.on('requestfailed', request => {
+              console.log(
+                `REQUEST FAILED ${request.url()}`
+              );
+
+              console.log(
+                `  failure: ${request.failure()?.errorText || 'ukjent'}`
+              );
+            });
+
+            try {
+              console.log('Åpner NFF...');
+
+              const response = await page.goto(URL, {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+              });
+
+              console.log(
+                `Første response: ${response?.status() ?? 'ukjent'}`
+              );
+
+              await page.waitForTimeout(10000);
+
+              console.log(`Final URL: ${page.url()}`);
+              console.log(`Title: ${await page.title()}`);
+
+              console.log('Venter 15 sekunder til...');
+
+              await page.waitForTimeout(15000);
+
+              console.log(`Final URL etter venting: ${page.url()}`);
+              console.log(`Title etter venting: ${await page.title()}`);
+
+            } finally {
+              await browser.close();
+            }
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE    
       - name: Sjekk NFF resale
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
