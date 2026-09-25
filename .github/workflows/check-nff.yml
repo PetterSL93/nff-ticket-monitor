@@ -24,6 +24,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Sjekk runner-IP
+        run: |
+          echo "Runner public IP:"
+          curl -4 https://api.ipify.org
+          echo
+
       - name: Installer Playwright
         run: |
           npm install playwright
